@@ -54,24 +54,36 @@ def start_screen_saver() -> None:
         logging.error(err_msg)
 
 
-def on_connect(client: mqtt.Client, userdata: Any, connect_flags: ConnectFlags, reason_code: ReasonCode, properties: Properties | None) -> None:
-    logging.info(f"connected. reason={reason_code}")
+class MQTTCallbacks:
 
+    def __init__(self, dry_run: bool) -> None:
+        self.dry_run = dry_run
 
-def on_disconnect(client: mqtt.Client, userdata: Any, disconnect_flags: DisconnectFlags, reason_code: ReasonCode, props: Properties | None) -> None:
-    logging.info(f"disconnected. reason={reason_code}")
+    def on_connect(self, client: mqtt.Client, userdata: Any, connect_flags: ConnectFlags, reason_code: ReasonCode, properties: Properties | None) -> None:
+        logging.info(f"connected. reason={reason_code}")
+        if 0 == reason_code.value:
+            client.subscribe("/motion/office")
 
+    def on_disconnect(self, client: mqtt.Client, userdata: Any, disconnect_flags: DisconnectFlags, reason_code: ReasonCode, props: Properties | None) -> None:
+        logging.info(f"disconnected. reason={reason_code}")
 
-def on_message(client: mqtt.Client, userdata: str, msg: MQTTMessage) -> None:
+    def on_log(self, client: mqtt.Client, userdata: Any, reason_code: int, log: str) -> None:
 
-    payload = msg.payload.decode("utf-8")
+        logging.info(log)
 
-    logging.info(f"{msg.topic} -> {payload}")
+    def on_message(self, client: mqtt.Client, userdata: str, msg: MQTTMessage) -> None:
 
-    if "away" == payload:
-        start_screen_saver()
-    else:
-        print(f"Unknown payload \"{payload}\"")
+        payload = msg.payload.decode("utf-8")
+
+        logging.info(f"{msg.topic} -> {payload}")
+
+        if True == self.dry_run:
+            return
+
+        if "away" == payload:
+            start_screen_saver()
+        else:
+            print(f"Unknown payload \"{payload}\"")
 
 
 def init_logging(verbose: bool, file_name: str = "logs.log"):
@@ -114,20 +126,30 @@ def main() -> int:
                         action="store_true",
                         help="verbose")
 
+    parser.add_argument("-d",
+                        "--dry-run",
+                        action="store_true",
+                        help="Don't execute anything, just log")
     try:
         args = parser.parse_args()
 
         init_logging(args.verbose)
 
+        logging.info("=" * 80)
+
+        cb = MQTTCallbacks(args.dry_run)
+
         client = mqtt.Client(CallbackAPIVersion.VERSION2)
         client.connect(args.server, keepalive=10)
-        client.subscribe("/motion/office")
-        client.on_message = on_message
-        client.on_connect = on_connect
-        client.on_disconnect = on_disconnect
+        client.on_message = cb.on_message
+        client.on_connect = cb.on_connect
+        client.on_disconnect = cb.on_disconnect
+        client.on_log = cb.on_log
+
         client.loop_forever()
 
         status = 0
+
     except KeyboardInterrupt:
         pass
 
