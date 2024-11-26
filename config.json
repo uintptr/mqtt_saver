@@ -1,0 +1,22 @@
+{
+    "server": {
+        "host": "10.0.0.2"
+    },
+    "topics": [
+        {
+            "topic": "/motion/office",
+            "payload": "leave",
+            "command": "xset dpms force off"
+        },
+        {
+            "topic": "/motion/porch",
+            "payload": "enter",
+            "command": "echo Motion Porch | aosd_cat -x 1250 -y -1000 -w 1800 -R white -n 90"
+        },
+        {
+            "topic": "/motion/driveway",
+            "payload": "enter",
+            "command": "echo Motion Driveway | aosd_cat -x 1250 -y -1000 -w 1800 -R white -n 90"
+        }
+    ]
+}

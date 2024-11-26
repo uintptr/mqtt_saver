@@ -1,1 +1,2 @@
 paho-mqtt
+git+https://github.com/uintptr/jsonconfig.git

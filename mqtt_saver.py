@@ -7,6 +7,7 @@ import subprocess
 import logging
 
 from typing import Any
+from dataclasses import dataclass
 
 import paho.mqtt.client as mqtt
 from paho.mqtt.client import MQTTMessage, ConnectFlags, DisconnectFlags
@@ -14,56 +15,81 @@ from paho.mqtt.enums import CallbackAPIVersion
 from paho.mqtt.reasoncodes import ReasonCode
 from paho.mqtt.properties import Properties
 
-DEF_MQTT_SERVER = "10.0.0.2"
+from jsonconfig import JSONConfig
+
+DEF_MQTT_SERVER = "localhost"
 
 
 class ShellExecError(Exception):
     pass
 
 
-def exec(cmd_line: str, cwd: str | None = None, check: bool = True) -> tuple[int, str, str]:
-
-    ret = 1
-    with subprocess.Popen(cmd_line,
-                          shell=True,
-                          text=True,
-                          stdout=subprocess.PIPE,
-                          stderr=subprocess.PIPE) as p:
-
-        stdout, stderr = p.communicate()
-
-        if p.returncode is not None:
-            ret = p.returncode
-
-        if True == check and 0 != ret:
-            raise ShellExecError(f"{cmd_line} returned {ret}")
-
-        return ret, stdout, stderr
-
-
-def start_screen_saver() -> None:
-
-    cmd_line = "xset dpms force off"
-    ret, stdout, stderr = exec(cmd_line, check=False)
-
-    logging.info(f"{cmd_line} -> {ret}")
-
-    if 0 != ret:
-        err_msg = f"{cmd_line} returned {ret}"
-        err_msg += f"stdout={stdout} stderr={stderr}"
-        logging.error(err_msg)
+@dataclass
+class MQTTTopic:
+    topic: str
+    payload: str
+    command: str
 
 
 class MQTTCallbacks:
 
-    def __init__(self, verbose: bool, dry_run: bool) -> None:
+    def __init__(self, config: JSONConfig, verbose: bool, dry_run: bool) -> None:
         self.verbose = verbose
         self.dry_run = dry_run
 
+        self.sub_topic_list: list[tuple[str, int]] = []
+        self.topics: dict[str, MQTTTopic] = {}
+
+        for t in config.get_list("/topics", []):
+            entry = MQTTTopic(**t)
+
+            # make it easy to search
+            self.topics[entry.topic] = entry
+            self.sub_topic_list.append((entry.topic, 0))
+
+    def __exec(self, cmd_line: str, cwd: str | None = None, check: bool = True) -> tuple[int, str, str]:
+
+        ret = 1
+        with subprocess.Popen(cmd_line,
+                              shell=True,
+                              text=True,
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.PIPE) as p:
+
+            stdout, stderr = p.communicate()
+
+            if p.returncode is not None:
+                ret = p.returncode
+
+            if True == check and 0 != ret:
+                raise ShellExecError(f"{cmd_line} returned {ret}")
+
+            return ret, stdout, stderr
+
+    def __execute_topic(self, topic: MQTTTopic) -> None:
+
+        logging.info(f"executing \"{topic.command}\"")
+
+        if True == self.dry_run:
+            return
+
+        ret, stdout, stderr = self.__exec(topic.command, check=False)
+
+        if 0 != ret:
+            err_msg = f"{topic.command} returned {ret}"
+
+            if "" != stdout:
+                err_msg += f"\n{stdout}"
+
+            if "" != stderr:
+                err_msg += f"\n{stderr}"
+            logging.error(err_msg)
+
     def on_connect(self, client: mqtt.Client, userdata: Any, connect_flags: ConnectFlags, reason_code: ReasonCode, properties: Properties | None) -> None:
         logging.info(f"connected. reason={reason_code}")
-        if 0 == reason_code.value:
-            client.subscribe("/motion/office")
+
+        if 0 == reason_code.value and len(self.sub_topic_list) > 0:
+            client.subscribe(self.sub_topic_list)
 
     def on_disconnect(self, client: mqtt.Client, userdata: Any, disconnect_flags: DisconnectFlags, reason_code: ReasonCode, props: Properties | None) -> None:
         logging.info(f"disconnected. reason={reason_code}")
@@ -77,15 +103,18 @@ class MQTTCallbacks:
 
         payload = msg.payload.decode("utf-8")
 
-        logging.info(f"{msg.topic} -> {payload}")
+        logging.debug(f"{msg.topic} -> {payload}")
 
-        if True == self.dry_run:
+        if msg.topic not in self.topics:
+            logging.warning(f"ignoring {msg.topic}")
             return
 
-        if "away" == payload:
-            start_screen_saver()
+        entry = self.topics[msg.topic]
+
+        if payload == entry.payload:
+            self.__execute_topic(entry)
         else:
-            print(f"Unknown payload \"{payload}\"")
+            logging.warning(f"payload not handled. payload=\"{payload}\"")
 
 
 def init_logging(verbose: bool, file_name: str = "logs.log"):
@@ -117,11 +146,14 @@ def main() -> int:
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-s",
-                        "--server",
+    script_root = os.path.abspath(os.path.dirname(sys.argv[0]))
+    def_config_file = os.path.join(script_root, "config.json")
+
+    parser.add_argument("-c",
+                        "--config",
                         type=str,
-                        default=DEF_MQTT_SERVER,
-                        help=f"MQTT server. Default: {DEF_MQTT_SERVER}")
+                        default=def_config_file,
+                        help=f"/path/to/config.json. Default: {def_config_file}")
 
     parser.add_argument("-v",
                         "--verbose",
@@ -135,14 +167,22 @@ def main() -> int:
     try:
         args = parser.parse_args()
 
+        config = JSONConfig(args.config)
+
+        host = config.get_str("/server/host")  # mandatory
+        keepalive = config.get_int("/server/keep_alive", 10)
+        port = config.get_int("/server/port", 1883)
+
         init_logging(args.verbose)
 
         logging.info("=" * 80)
 
-        cb = MQTTCallbacks(args.verbose, args.dry_run)
+        cb = MQTTCallbacks(config, args.verbose, args.dry_run)
 
         client = mqtt.Client(CallbackAPIVersion.VERSION2)
-        client.connect(args.server, keepalive=10)
+        client.connect(host,
+                       port=port,
+                       keepalive=keepalive)
         client.on_message = cb.on_message
         client.on_connect = cb.on_connect
         client.on_disconnect = cb.on_disconnect
