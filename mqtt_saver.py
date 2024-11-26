@@ -56,7 +56,8 @@ def start_screen_saver() -> None:
 
 class MQTTCallbacks:
 
-    def __init__(self, dry_run: bool) -> None:
+    def __init__(self, verbose: bool, dry_run: bool) -> None:
+        self.verbose = verbose
         self.dry_run = dry_run
 
     def on_connect(self, client: mqtt.Client, userdata: Any, connect_flags: ConnectFlags, reason_code: ReasonCode, properties: Properties | None) -> None:
@@ -69,7 +70,8 @@ class MQTTCallbacks:
 
     def on_log(self, client: mqtt.Client, userdata: Any, reason_code: int, log: str) -> None:
 
-        logging.info(log)
+        if True == self.verbose:
+            logging.info(log)
 
     def on_message(self, client: mqtt.Client, userdata: str, msg: MQTTMessage) -> None:
 
@@ -137,7 +139,7 @@ def main() -> int:
 
         logging.info("=" * 80)
 
-        cb = MQTTCallbacks(args.dry_run)
+        cb = MQTTCallbacks(args.verbose, args.dry_run)
 
         client = mqtt.Client(CallbackAPIVersion.VERSION2)
         client.connect(args.server, keepalive=10)
