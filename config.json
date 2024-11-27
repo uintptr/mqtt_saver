@@ -19,7 +19,7 @@
             "osd": "Motion Driveway"
         },
         {
-            "topic": "/motion/stair",
+            "topic": "/motion/stairs",
             "payload": "enter",
             "osd": "Motion Stairs"
         }
