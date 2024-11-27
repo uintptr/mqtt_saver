@@ -11,12 +11,17 @@
         {
             "topic": "/motion/porch",
             "payload": "enter",
-            "command": "echo Motion Porch | aosd_cat -x 1250 -y -1000 -w 1800 -R white -n 90"
+            "osd": "Motion Porch"
         },
         {
             "topic": "/motion/driveway",
             "payload": "enter",
-            "command": "echo Motion Driveway | aosd_cat -x 1250 -y -1000 -w 1800 -R white -n 90"
+            "osd": "Motion Driveway"
+        },
+        {
+            "topic": "/motion/stair",
+            "payload": "enter",
+            "osd": "Motion Stairs"
         }
     ]
 }

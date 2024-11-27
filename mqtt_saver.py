@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-
 import os
 import sys
 import argparse
 import subprocess
 import logging
+import shutil
+
 
 from typing import Any
 from dataclasses import dataclass
@@ -21,14 +22,84 @@ DEF_MQTT_SERVER = "localhost"
 
 
 class ShellExecError(Exception):
-    pass
+
+    def __init__(self, cmd_line: str, ret: int, stdout: str, stderr: str) -> None:
+
+        err_msg = f"{cmd_line} returned {ret}"
+
+        if "" != stdout:
+            err_msg += f"\n{stdout}"
+
+        if "" != stderr:
+            err_msg += f"\n{stderr}"
+
+        self.err_msg = err_msg
+
+    def __str__(self) -> str:
+        return self.err_msg
 
 
 @dataclass
 class MQTTTopic:
     topic: str
     payload: str
-    command: str
+    command: str | None = None
+    osd: str | None = None
+
+
+def exec_text_command(cmd_line: str, cwd: str | None = None, check: bool = True) -> tuple[int, str, str]:
+
+    ret = 1
+    with subprocess.Popen(cmd_line,
+                          shell=True,
+                          text=True,
+                          stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE) as p:
+
+        stdout, stderr = p.communicate()
+
+        if p.returncode is not None:
+            ret = p.returncode
+
+        if True == check and 0 != ret:
+            raise ShellExecError(cmd_line, ret, stdout, stderr)
+
+        return ret, stdout, stderr
+
+
+class OSD:
+    def __init__(self) -> None:
+        pass
+
+    def __get_geometry(self) -> tuple[int, int]:
+
+        _, stdout, _ = exec_text_command("xrandr")
+
+        for line in stdout.splitlines():
+            if " primary " not in line:
+                continue
+            geo_str = line.split()[3].split("+")[0]
+
+            w_str, h_str = geo_str.split("x")
+
+            return int(w_str), int(h_str)
+
+        raise NotImplementedError("TODO")
+
+    def display_text(self, text: str, text_size: int = 90, text_color: str = "white") -> None:
+
+        width, height = self.__get_geometry()
+
+        text_width = len(text) * text_size
+
+        y = int((height / 2) - (text_size / 2))
+        x = int((width / 2) - (text_width / 2))
+
+        cmd_line = f"echo \"{text}\" | aosd_cat -x {x} -y -{y} -w {text_width}"
+        cmd_line += f" -R {text_color}"
+        cmd_line += f" -n {text_size}"
+
+        exec_text_command(cmd_line)
 
 
 class MQTTCallbacks:
@@ -36,6 +107,8 @@ class MQTTCallbacks:
     def __init__(self, config: JSONConfig, verbose: bool, dry_run: bool) -> None:
         self.verbose = verbose
         self.dry_run = dry_run
+
+        self.osd = OSD()
 
         self.sub_topic_list: list[tuple[str, int]] = []
         self.topics: dict[str, MQTTTopic] = {}
@@ -47,33 +120,17 @@ class MQTTCallbacks:
             self.topics[entry.topic] = entry
             self.sub_topic_list.append((entry.topic, 0))
 
-    def __exec(self, cmd_line: str, cwd: str | None = None, check: bool = True) -> tuple[int, str, str]:
+    def __parse_topic_command(self, topic: MQTTTopic) -> None:
 
-        ret = 1
-        with subprocess.Popen(cmd_line,
-                              shell=True,
-                              text=True,
-                              stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE) as p:
-
-            stdout, stderr = p.communicate()
-
-            if p.returncode is not None:
-                ret = p.returncode
-
-            if True == check and 0 != ret:
-                raise ShellExecError(f"{cmd_line} returned {ret}")
-
-            return ret, stdout, stderr
-
-    def __execute_topic(self, topic: MQTTTopic) -> None:
+        if topic.command is None:
+            return
 
         logging.info(f"executing \"{topic.command}\"")
 
         if True == self.dry_run:
             return
 
-        ret, stdout, stderr = self.__exec(topic.command, check=False)
+        ret, stdout, stderr = exec_text_command(topic.command, check=False)
 
         if 0 != ret:
             err_msg = f"{topic.command} returned {ret}"
@@ -84,6 +141,26 @@ class MQTTCallbacks:
             if "" != stderr:
                 err_msg += f"\n{stderr}"
             logging.error(err_msg)
+
+    def __parse_topic_osd(self, topic: MQTTTopic) -> None:
+
+        if topic.osd is None:
+            return
+
+        logging.info(f"displaying \"{topic.osd}\"")
+
+        self.osd.display_text(topic.osd)
+
+    def __parse_topic(self, topic: MQTTTopic) -> None:
+
+        try:
+            if topic.command is not None:
+                self.__parse_topic_command(topic)
+
+            if topic.osd is not None:
+                self.__parse_topic_osd(topic)
+        except ShellExecError as e:
+            logging.error(str(e))
 
     def on_connect(self, client: mqtt.Client, userdata: Any, connect_flags: ConnectFlags, reason_code: ReasonCode, properties: Properties | None) -> None:
         logging.info(f"connected. reason={reason_code}")
@@ -112,7 +189,7 @@ class MQTTCallbacks:
         entry = self.topics[msg.topic]
 
         if payload == entry.payload:
-            self.__execute_topic(entry)
+            self.__parse_topic(entry)
         else:
             logging.warning(f"payload not handled. payload=\"{payload}\"")
 
@@ -138,6 +215,23 @@ def init_logging(verbose: bool, file_name: str = "logs.log"):
         console_handler.setLevel(logging.INFO)
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
+
+
+def check_requirements() -> None:
+
+    avail = True
+
+    shell_commands = ["xrandr", "aosd_cat"]
+
+    for c in shell_commands:
+
+        path = shutil.which(c)
+
+        if path is None:
+            print(f"ERROR: \"{c}\" command was not found in path")
+            avail = False
+
+    assert True == avail, "Missing requirements"
 
 
 def main() -> int:
@@ -167,6 +261,8 @@ def main() -> int:
     try:
         args = parser.parse_args()
 
+        check_requirements()
+
         config = JSONConfig(args.config)
 
         host = config.get_str("/server/host")  # mandatory
@@ -193,6 +289,8 @@ def main() -> int:
         status = 0
 
     except KeyboardInterrupt:
+        pass
+    except AssertionError:
         pass
 
     return status
