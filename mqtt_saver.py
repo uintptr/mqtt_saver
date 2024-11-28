@@ -71,6 +71,23 @@ class OSD:
     def __init__(self) -> None:
         pass
 
+    def __get_geometry_dpy(self) -> tuple[int, int]:
+
+        _, stdout, _ = exec_text_command("xdpyinfo")
+
+        for line in stdout.splitlines():
+
+            if "dimensions:" not in line:
+                continue
+
+            geo_str = line.split()[1]
+
+            w_str, h_str = geo_str.split("x")
+
+            return int(w_str), int(h_str)
+
+        raise NotImplementedError("couldn't find desktop's geometry")
+
     def __get_geometry(self) -> tuple[int, int]:
 
         _, stdout, _ = exec_text_command("xrandr")
@@ -84,7 +101,7 @@ class OSD:
 
             return int(w_str), int(h_str)
 
-        raise NotImplementedError("TODO")
+        return self.__get_geometry_dpy()
 
     def display_text(self, text: str, text_size: int = 90, text_color: str = "white") -> None:
 
@@ -221,7 +238,7 @@ def check_requirements() -> None:
 
     avail = True
 
-    shell_commands = ["xrandr", "aosd_cat"]
+    shell_commands = ["xrandr", "aosd_cat", "xdpyinfo"]
 
     for c in shell_commands:
 
