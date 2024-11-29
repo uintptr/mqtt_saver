@@ -109,8 +109,8 @@ class OSD:
 
         text_width = len(text) * text_size
 
-        y = int((height / 2) - (text_size / 2))
-        x = int((width / 2) - (text_width / 2))
+        y = int((height / 2) - (text_size / 4))
+        x = int((width / 2) - (text_width / 4))
 
         cmd_line = f"echo \"{text}\" | aosd_cat -x {x} -y -{y} -w {text_width}"
         cmd_line += f" -R {text_color}"
