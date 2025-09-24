@@ -2,7 +2,6 @@
     "server": {
         "host": "10.0.0.2"
     },
-    "notify": "dunst",
     "topics": [
         {
             "topic": "/motion/office",

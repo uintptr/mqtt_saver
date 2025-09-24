@@ -6,9 +6,8 @@ import subprocess
 import logging
 import shutil
 
-from abc import ABC, abstractmethod
 
-from typing import Any, override, final
+from typing import Any
 from dataclasses import dataclass
 
 import paho.mqtt.client as mqtt
@@ -26,8 +25,6 @@ class ShellExecError(Exception):
 
     def __init__(self, cmd_line: str, ret: int, stdout: str, stderr: str) -> None:
 
-        super().__init__()
-
         err_msg = f"{cmd_line} returned {ret}"
 
         if "" != stdout:
@@ -36,9 +33,8 @@ class ShellExecError(Exception):
         if "" != stderr:
             err_msg += f"\n{stderr}"
 
-        self.err_msg: str = err_msg
+        self.err_msg = err_msg
 
-    @override
     def __str__(self) -> str:
         return self.err_msg
 
@@ -51,7 +47,7 @@ class MQTTTopic:
     osd: str | None = None
 
 
-def exec_text_command(cmd_line: str, check: bool = True) -> tuple[int, str, str]:
+def exec_text_command(cmd_line: str, cwd: str | None = None, check: bool = True) -> tuple[int, str, str]:
 
     ret = 1
     with subprocess.Popen(cmd_line,
@@ -71,18 +67,9 @@ def exec_text_command(cmd_line: str, check: bool = True) -> tuple[int, str, str]
         return ret, stdout, stderr
 
 
-class MqttNotify(ABC):
-
-    @abstractmethod
-    def display_text(self, text: str) -> None:
+class OSD:
+    def __init__(self) -> None:
         pass
-
-
-@final
-class OSD(MqttNotify):
-    def __init__(self, text_size: int = 90, text_color: str = "white") -> None:
-        self.text_size = text_size
-        self.text_color = text_color
 
     def __get_geometry_dpy(self) -> tuple[int, int]:
 
@@ -116,49 +103,29 @@ class OSD(MqttNotify):
 
         return self.__get_geometry_dpy()
 
-    @override
-    def display_text(self, text: str) -> None:
+    def display_text(self, text: str, text_size: int = 90, text_color: str = "white") -> None:
 
         width, height = self.__get_geometry()
 
-        text_width = len(text) * self.text_size
+        text_width = len(text) * text_size
 
-        y = int((height / 2) - (self.text_size / 4))
+        y = int((height / 2) - (text_size / 4))
         x = int((width / 2) - (text_width / 4))
 
         cmd_line = f"echo \"{text}\" | aosd_cat -x {x} -y -{y} -w {text_width}"
-        cmd_line += f" -R {self.text_color}"
-        cmd_line += f" -n {self.text_size}"
+        cmd_line += f" -R {text_color}"
+        cmd_line += f" -n {text_size}"
 
-        _ = exec_text_command(cmd_line)
-
-
-class DunstNotify(MqttNotify):
-    def __init__(self) -> None:
-        pass
-
-    @override
-    def display_text(self, text: str) -> None:
-
-        cmd_line = f"dunstify {text}"
         exec_text_command(cmd_line)
 
 
-@final
 class MQTTCallbacks:
 
     def __init__(self, config: JSONConfig, verbose: bool, dry_run: bool) -> None:
-        self.verbose: bool = verbose
-        self.dry_run: bool = dry_run
+        self.verbose = verbose
+        self.dry_run = dry_run
 
-        notify_type = config.get_str("/notify", default="osd")
-
-        if notify_type == "osd":
-            self.notify = OSD()
-        elif notify_type == "dunst":
-            self.notify = DunstNotify()
-        else:
-            raise NotImplementedError()
+        self.osd = OSD()
 
         self.sub_topic_list: list[tuple[str, int]] = []
         self.topics: dict[str, MQTTTopic] = {}
@@ -199,7 +166,7 @@ class MQTTCallbacks:
 
         logging.info(f"displaying \"{topic.osd}\"")
 
-        self.notify.display_text(topic.osd)
+        self.osd.display_text(topic.osd)
 
     def __parse_topic(self, topic: MQTTTopic) -> None:
 
@@ -283,6 +250,7 @@ def check_requirements() -> None:
 
     assert True == avail, "Missing requirements"
 
+
 def main() -> int:
 
     status = 1
@@ -326,8 +294,8 @@ def main() -> int:
 
         client = mqtt.Client(CallbackAPIVersion.VERSION2)
         client.connect(host,
-                           port=port,
-                           keepalive=keepalive)
+                       port=port,
+                       keepalive=keepalive)
         client.on_message = cb.on_message
         client.on_connect = cb.on_connect
         client.on_disconnect = cb.on_disconnect
